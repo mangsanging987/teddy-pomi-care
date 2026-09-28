@@ -87,24 +87,138 @@ function dayDocRef(dateS, dogId) { return CLOUD.db.collection('days').doc(dateS 
 function medDocRef(medId) { return CLOUD.db.collection('meds').doc(medId); }
 function medLogDocRef(dateS, dogId, medId) { return CLOUD.db.collection('medLog').doc(dateS + '_' + dogId + '_' + medId); }
 function cloudWrite(p) {
-  if (CLOUD.on && p && p.catch) p.catch(function (e) { console.warn('[cloud 쓰기 실패]', e); });
+  if (CLOUD.on && p && p.catch) p.catch(function (e) {
+    console.warn('[cloud 쓰기 실패]', e);
+    flashBadge('☁️ 동기화 실패');
+  });
+}
+// 잠깐 뜨는 상태 뱃지
+function flashBadge(msg) {
+  let b = document.getElementById('cloudBadge');
+  if (!b) {
+    b = document.createElement('div');
+    b.id = 'cloudBadge';
+    document.body.appendChild(b);
+  }
+  b.textContent = msg;
+  clearTimeout(flashBadge.t);
+  flashBadge.t = setTimeout(function () {
+    const x = document.getElementById('cloudBadge');
+    if (x && x.parentNode) x.parentNode.removeChild(x);
+  }, 3000);
+}
+
+// ---------- 로컬 우선 보호 ----------
+// 탭한 값은 클라우드에 반영되기 전까지 스냅샷이 와도 지워지지 않게 pending에 기록.
+// (쓰기 실패/지연, 부팅 중 탭 같은 경우에 입력이 리셋되던 버그 방지)
+const pendingSlot = {}; // "dateS|dogId|slot|field" -> { v, ts }
+const pendingNote = {}; // "dateS|dogId" -> { v, ts }
+const pendingMed = {};  // "dateS|dogId|medId|time" -> { v, ts }
+const PENDING_TTL = 30000;
+function pendingSlotKey(dateS, dogId, slot, field) { return dateS + '|' + dogId + '|' + slot + '|' + field; }
+function pendingDocKey(dateS, dogId) { return dateS + '|' + dogId; }
+function normSlotVal(value) {
+  return (value === undefined || value === null || value === '') ? undefined : value;
+}
+function hasPendingDayWrites(docKey) {
+  if (pendingNote[docKey]) return true;
+  const p = docKey + '|';
+  return Object.keys(pendingSlot).some(function (k) { return k.indexOf(p) === 0; });
+}
+function hasLocalDayData(rec) {
+  if (rec.note && rec.note.trim()) return true;
+  if (rec.photos && rec.photos.length) return true;
+  return Object.keys(rec.slots || {}).some(function (sid) {
+    const s = rec.slots[sid] || {};
+    return s.mood !== undefined || s.meal !== undefined || s.poop !== undefined ||
+      (s.mealNote && s.mealNote.trim());
+  });
+}
+// 스냅샷에 pending 값을 다시 입히고, 반영됐거나 만료된 pending은 정리
+function reapplyPendingSlot(rec, dateS, dogId, d, acked) {
+  const prefix = dateS + '|' + dogId + '|';
+  const now = Date.now();
+  Object.keys(pendingSlot).forEach(function (k) {
+    if (k.indexOf(prefix) !== 0) return;
+    const p = pendingSlot[k];
+    const rest = k.slice(prefix.length).split('|');
+    const slot = rest[0], field = rest[1];
+    const sd = (d && d.slots && d.slots[slot] && typeof d.slots[slot] === 'object') ? d.slots[slot] : {};
+    const sv = sd[field];
+    const reflected = (sv === p.v) || (sv === undefined && p.v === undefined);
+    if (reflected || (acked && now - p.ts > PENDING_TTL)) { delete pendingSlot[k]; return; }
+    if (!rec.slots[slot] || typeof rec.slots[slot] !== 'object') rec.slots[slot] = {};
+    if (p.v === undefined) delete rec.slots[slot][field];
+    else rec.slots[slot][field] = p.v;
+  });
+}
+function reapplyPendingNote(rec, docKey, d, acked) {
+  const p = pendingNote[docKey];
+  if (!p) return;
+  const sv = d ? d.note : undefined;
+  if (sv === p.v || (acked && Date.now() - p.ts > PENDING_TTL)) { delete pendingNote[docKey]; return; }
+  rec.note = p.v;
+}
+function reapplyPendingMed(checks, dateS, dogId, acked) {
+  const prefix = dateS + '|' + dogId + '|';
+  const now = Date.now();
+  Object.keys(pendingMed).forEach(function (k) {
+    if (k.indexOf(prefix) !== 0) return;
+    const p = pendingMed[k];
+    const rest = k.slice(prefix.length).split('|');
+    const mid = rest[0], t = rest[1];
+    const on = !!(checks[mid] && checks[mid][t]);
+    if (on === p.v || (acked && now - p.ts > PENDING_TTL)) { delete pendingMed[k]; return; }
+    if (p.v) { if (!checks[mid]) checks[mid] = {}; checks[mid][t] = true; }
+    else if (checks[mid]) delete checks[mid][t];
+  });
+}
+// 부팅 때 CLOUD.on이 false여서 못 보낸 기록들을 뒤늦게 전송
+function flushPendingWrites() {
+  if (!CLOUD.on) return;
+  Object.keys(pendingSlot).forEach(function (k) {
+    const p = pendingSlot[k];
+    const a = k.split('|');
+    writeSlotField(a[0], a[1], a[2], a[3], p.v);
+  });
+  Object.keys(pendingNote).forEach(function (k) {
+    const a = k.split('|');
+    writeNoteField(a[0], a[1], pendingNote[k].v);
+  });
+  Object.keys(pendingMed).forEach(function (k) {
+    const a = k.split('|');
+    writeMedCheck(a[0], a[1], a[2], a[3], pendingMed[k].v);
+  });
 }
 // 타임 슬롯 필드 저장 (dot 표기로 필드 단위 병합 → 여러 사람이 동시에 써도 덜 겹침)
+// pending에 먼저 기록해 두었다가 스냅샷이 와도 로컬 입력이 지워지지 않게 보호
 function cloudSetSlotField(dateS, dogId, slot, field, value) {
+  const v = normSlotVal(value);
+  pendingSlot[pendingSlotKey(dateS, dogId, slot, field)] = { v: v, ts: Date.now() };
   if (!CLOUD.on) return;
+  writeSlotField(dateS, dogId, slot, field, v);
+}
+function writeSlotField(dateS, dogId, slot, field, v) {
   const data = { date: dateS, dogId: dogId };
   data['slots.' + slot + '.' + field] =
-    (value === undefined || value === null || value === '')
-      ? firebase.firestore.FieldValue.delete()
-      : value;
+    (v === undefined) ? firebase.firestore.FieldValue.delete() : v;
   cloudWrite(dayDocRef(dateS, dogId).set(data, { merge: true }));
 }
 function cloudSetNote(dateS, dogId, note) {
+  const docKey = pendingDocKey(dateS, dogId);
+  pendingNote[docKey] = { v: note || '', ts: Date.now() };
   if (!CLOUD.on) return;
+  writeNoteField(dateS, dogId, note);
+}
+function writeNoteField(dateS, dogId, note) {
   cloudWrite(dayDocRef(dateS, dogId).set({ date: dateS, dogId: dogId, note: note }, { merge: true }));
 }
 function cloudSetMedCheck(dateS, dogId, medId, time, taken) {
+  pendingMed[dateS + '|' + dogId + '|' + medId + '|' + time] = { v: !!taken, ts: Date.now() };
   if (!CLOUD.on) return;
+  writeMedCheck(dateS, dogId, medId, time, taken);
+}
+function writeMedCheck(dateS, dogId, medId, time, taken) {
   const op = taken
     ? firebase.firestore.FieldValue.arrayUnion(time)
     : firebase.firestore.FieldValue.arrayRemove(time);
@@ -137,14 +251,20 @@ function subscribeCloud() {
   CLOUD.unsubs.push(dayDocRef(dateS, dogId).onSnapshot(function (doc) {
     const rec = dayRec(dateS, dogId);
     const prevChecks = rec.medChecks;
-    if (doc.exists) {
-      const d = doc.data();
+    const docKey = pendingDocKey(dateS, dogId);
+    const d = doc.exists ? doc.data() : null;
+    if (d) {
       rec.slots = d.slots || {};
       rec.note = d.note || '';
       rec.photos = d.photos || [];
-    } else {
+    } else if (!hasLocalDayData(rec) && !hasPendingDayWrites(docKey)) {
+      // 클라우드에 문서가 없고 로컬에도 기록이 없을 때만 초기화
+      // (부팅 중 탭한 기록이나 아직 안 간 쓰기가 스냅샷에 지워지던 버그 방지)
       rec.slots = {}; rec.note = ''; rec.photos = [];
     }
+    const acked = !doc.metadata || doc.metadata.hasPendingWrites === false;
+    reapplyPendingSlot(rec, dateS, dogId, d, acked);
+    reapplyPendingNote(rec, docKey, d, acked);
     SLOTS.forEach(function (s) { if (!rec.slots[s.id]) rec.slots[s.id] = {}; });
     rec.medChecks = prevChecks || {};
     saveState();
@@ -174,6 +294,8 @@ function subscribeCloud() {
           checks[d.medId][t] = true;
         });
       });
+      const acked = !snap.metadata || snap.metadata.hasPendingWrites === false;
+      reapplyPendingMed(checks, dateS, dogId, acked);
       dayRec(dateS, dogId).medChecks = checks;
       saveState();
       if (ui.view === 'today' && ui.date === dateS && ui.dog === dogId) renderToday();
@@ -264,6 +386,7 @@ async function bootCloud() {
     }
     await firebase.auth().signInAnonymously();
     CLOUD.on = true;
+    flushPendingWrites(); // 부팅 전에 탭한 기록이 있으면 뒤늦게 전송
     await migrateLocalToCloud();
     subscribeCloud();
   } catch (e) {
@@ -750,7 +873,7 @@ document.addEventListener('click', function (e) {
     const field = el.dataset.field;
     let val = el.dataset.value;
     if (field === 'mood') val = Number(val);
-    slot[field] = (slot[field] === val) ? undefined : val; // 다시 탭하면 취소
+    slot[field] = val; // 같은 값을 다시 탭해도 유지 (실수로 풀리던 문제 수정)
     saveState();
     cloudSetSlotField(ui.date, ui.dog, el.dataset.slot, field, slot[field]);
     renderToday();
