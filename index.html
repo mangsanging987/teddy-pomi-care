@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>테디·포미 데일리 케어</title>
+  <meta name="description" content="테디와 포미의 건강 기록 다이어리">
+  <meta name="theme-color" content="#FF8FA3">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="테디포미케어">
+  <link rel="apple-touch-icon" href="icon-512.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>🐾 테디·포미 케어</h1>
+    <div class="dog-tabs" id="dogTabs"></div>
+  </header>
+
+  <main>
+    <!-- 오늘 기록 -->
+    <section id="view-today" class="view">
+      <div class="date-nav">
+        <button class="nav-btn" data-action="prev-day" aria-label="이전 날">‹</button>
+        <div class="date-text">
+          <div id="dateLabel"></div>
+          <div id="dateSub" class="muted"></div>
+        </div>
+        <button class="nav-btn" data-action="next-day" aria-label="다음 날">›</button>
+      </div>
+
+      <div id="slotList"></div>
+
+      <div class="card">
+        <h2>💊 약</h2>
+        <div id="medCheckList"></div>
+        <button class="link-btn" data-action="goto-view" data-view="meds">약 추가 · 시간 변경하기 →</button>
+      </div>
+
+      <div class="card">
+        <h2>📝 특이사항</h2>
+        <textarea id="noteInput" rows="3" placeholder="오늘 특이사항을 적어주세요 (예: 산책 중 기침을 했어요)"></textarea>
+        <div class="photo-area">
+          <div id="photoThumbs" class="photo-thumbs"></div>
+          <label class="photo-add" title="사진 추가">📷<input type="file" id="photoInput" accept="image/*" multiple hidden></label>
+        </div>
+      </div>
+    </section>
+
+    <!-- 달력 -->
+    <section id="view-cal" class="view hidden">
+      <div class="date-nav">
+        <button class="nav-btn" data-action="cal-prev" aria-label="이전 달">‹</button>
+        <div class="date-text"><div id="calLabel"></div></div>
+        <button class="nav-btn" data-action="cal-next" aria-label="다음 달">›</button>
+      </div>
+      <div class="card">
+        <div class="cal-weekdays">
+          <span class="sun">일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span class="sat">토</span>
+        </div>
+        <div class="cal-grid" id="calGrid"></div>
+      </div>
+      <div class="card hidden" id="calDetail"></div>
+    </section>
+
+    <!-- 약 관리 -->
+    <section id="view-meds" class="view hidden">
+      <div id="medManageList"></div>
+      <div class="card">
+        <h2 id="medFormTitle">➕ 약 추가</h2>
+        <label class="field-label">약 이름</label>
+        <input id="newMedName" class="text-input" placeholder="예: 심장약">
+        <label class="field-label">먹는 시간 (쉼표로 구분)</label>
+        <input id="newMedTimes" class="text-input" placeholder="예: 08:00, 20:00" inputmode="numeric">
+        <label class="field-label">메모 (선택)</label>
+        <input id="newMedMemo" class="text-input" placeholder="예: 식후 30분">
+        <div class="btn-row">
+          <button id="cancelEditBtn" class="ghost-btn hidden">취소</button>
+          <button id="saveMedBtn" class="primary-btn">추가하기</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button data-action="goto-view" data-view="today" class="active">📅<span>오늘</span></button>
+    <button data-action="goto-view" data-view="cal">🗓️<span>달력</span></button>
+    <button data-action="goto-view" data-view="meds">💊<span>약 관리</span></button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
