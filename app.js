@@ -39,6 +39,14 @@ function prettyDate(s) {
 }
 function uid() { return 'id' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
 
+// 현재 시간대에 해당하는 슬롯
+function currentSlotId() {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 11) return 'morning';
+  if (h >= 11 && h < 17) return 'lunch';
+  return 'evening';
+}
+
 // ---------- 저장소 (localStorage) ----------
 const LS_KEY = 'pomCare.v1';
 function freshState() {
@@ -147,18 +155,53 @@ const ui = {
   view: 'today',
   calCursor: (function () { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })(),
   editingMedId: null,
+  slotOpen: null, // { date, open: { morning, lunch, evening } }
 };
 function dogName(id) {
   const d = state.dogs.find(function (x) { return x.id === id; });
   return d ? d.name : id;
 }
 
+// 슬롯 펼침 상태 (날짜 바뀌면 초기화: 오늘은 현재 시간대만 펼침)
+function ensureSlotOpen() {
+  if (!ui.slotOpen || ui.slotOpen.date !== ui.date) {
+    const open = { morning: false, lunch: false, evening: false };
+    if (ui.date === dateStr(new Date())) open[currentSlotId()] = true;
+    ui.slotOpen = { date: ui.date, open: open };
+  }
+}
+// 접힌 슬롯 헤더에 보여줄 요약 이모지
+function slotSummary(v) {
+  const parts = [];
+  const mood = MOODS.find(function (x) { return x.v === v.mood; });
+  const meal = MEALS.find(function (x) { return x.v === v.meal; });
+  const poop = POOPS.find(function (x) { return x.v === v.poop; });
+  if (mood) parts.push(mood.e);
+  if (meal) parts.push(meal.e);
+  if (poop) parts.push(poop.e);
+  return parts.length ? parts.join(' ') : '<span class="muted">미기록</span>';
+}
+
+// 강아지 얼굴 사진 (파일이 있을 때만 표시, 없으면 이모지)
+const DOG_PHOTOS = { teddy: 'teddy.png', pomi: 'pomi.png' };
+const dogPhotoOk = {};
+function preloadDogPhotos() {
+  Object.keys(DOG_PHOTOS).forEach(function (id) {
+    const img = new Image();
+    img.onload = function () { dogPhotoOk[id] = true; renderDogTabs(); };
+    img.src = DOG_PHOTOS[id];
+  });
+}
+
 // ---------- 렌더: 강아지 탭 ----------
 function renderDogTabs() {
   const el = document.getElementById('dogTabs');
   el.innerHTML = state.dogs.map(function (d) {
+    const face = dogPhotoOk[d.id]
+      ? '<img class="dog-face" src="' + DOG_PHOTOS[d.id] + '" alt="' + escapeAttr(d.name) + '">'
+      : d.emoji + ' ';
     return '<button data-action="select-dog" data-dog="' + d.id + '"' +
-      (d.id === ui.dog ? ' class="active"' : '') + '>' + d.emoji + ' ' + d.name + '</button>';
+      (d.id === ui.dog ? ' class="active"' : '') + '>' + face + d.name + '</button>';
   }).join('');
 }
 
@@ -173,15 +216,21 @@ function optRow(field, slotId, options, current) {
 
 function renderToday() {
   const rec = dayRec(ui.date, ui.dog);
+  ensureSlotOpen();
   document.getElementById('dateLabel').textContent = prettyDate(ui.date);
   const todayS = dateStr(new Date());
   document.getElementById('dateSub').textContent =
     ui.date === todayS ? '오늘' : (ui.date < todayS ? '지난 기록' : '미래 날짜');
 
-  // 3타임 슬롯
+  // 3타임 슬롯 (접이식)
   document.getElementById('slotList').innerHTML = SLOTS.map(function (s) {
     const v = rec.slots[s.id] || {};
-    return '<div class="card"><div class="slot-title">' + s.label + '</div>' +
+    const isOpen = ui.slotOpen.open[s.id];
+    return '<div class="card"><button class="slot-head" data-action="toggle-slot" data-slot="' + s.id + '">' +
+      '<span class="slot-title">' + s.label + '</span>' +
+      '<span class="slot-sum">' + slotSummary(v) + '</span>' +
+      '<span class="slot-arrow">' + (isOpen ? '▾' : '▸') + '</span></button>' +
+      '<div class="slot-body' + (isOpen ? '' : ' hidden') + '">' +
       '<div class="field"><div class="field-name">컨디션</div>' +
         optRow('mood', s.id, MOODS, v.mood) + '</div>' +
       '<div class="field"><div class="field-name">식사</div>' +
@@ -190,7 +239,7 @@ function renderToday() {
         ' placeholder="메뉴 (예: 사료, 처방식)" value="' + escapeAttr(v.mealNote || '') + '"></div>' +
       '<div class="field"><div class="field-name">응가</div>' +
         optRow('poop', s.id, POOPS, v.poop) + '</div>' +
-      '</div>';
+      '</div></div>';
   }).join('');
 
   // 약 체크리스트 (시간 순)
@@ -413,6 +462,12 @@ document.addEventListener('click', function (e) {
     saveState();
     renderToday();
   }
+  else if (a === 'toggle-slot') {
+    ensureSlotOpen();
+    const sid = el.dataset.slot;
+    ui.slotOpen.open[sid] = !ui.slotOpen.open[sid];
+    renderToday();
+  }
   else if (a === 'toggle-med') {
     const rec = dayRec(ui.date, ui.dog);
     const mid = el.dataset.med, t = el.dataset.time;
@@ -517,5 +572,6 @@ if ('serviceWorker' in navigator) {
 }
 
 // ---------- 시작 ----------
+preloadDogPhotos();
 renderDogTabs();
 switchView('today');

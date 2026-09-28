@@ -21,6 +21,7 @@ app.js                전체 로직
 manifest.webmanifest  PWA 매니페스트
 sw.js                 서비스 워커 (오프라인 캐시)
 icon-512.png          앱 아이콘
+teddy.png / pomi.png  강아지 얼굴 사진 (있으면 탭에 표시, 없으면 이모지)
 ```
 
 ## 로컬 미리보기

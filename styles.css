@@ -98,6 +98,38 @@ body {
 }
 .slot-title { font-size: 16px; font-weight: 800; margin-bottom: 10px; }
 
+/* 접이식 타임 슬롯 */
+.slot-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 2px 0;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--ink);
+  text-align: left;
+}
+.slot-head .slot-title { margin-bottom: 0; }
+.slot-sum { flex: 1; font-size: 19px; }
+.slot-sum .muted { font-size: 13px; }
+.slot-arrow { color: var(--muted); font-size: 18px; }
+.slot-body { margin-top: 8px; }
+
+/* 강아지 얼굴 사진 */
+.dog-face {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  vertical-align: -7px;
+  margin-right: 2px;
+  border: 1.5px solid var(--line);
+}
+.dog-tabs button.active .dog-face { border-color: #fff; }
+
 .field { margin-bottom: 14px; }
 .field:last-child { margin-bottom: 0; }
 .field-name {
