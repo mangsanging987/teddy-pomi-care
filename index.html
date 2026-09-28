@@ -3,20 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>테디·포미 데일리 케어</title>
-  <meta name="description" content="테디와 포미의 건강 기록 다이어리">
+  <title>폼폼케어</title>
+  <meta name="description" content="폼폼케어 — 테디와 포미의 건강 기록 다이어리">
   <meta name="theme-color" content="#FF8FA3">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="테디포미케어">
+  <meta name="apple-mobile-web-app-title" content="폼폼케어">
   <link rel="apple-touch-icon" href="icon-512.png">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <header class="app-header">
-    <h1>🐾 테디·포미 케어</h1>
+    <h1>🐾 폼폼케어</h1>
     <div class="dog-tabs" id="dogTabs"></div>
   </header>
 
@@ -47,6 +47,7 @@
           <div id="photoThumbs" class="photo-thumbs"></div>
           <label class="photo-add" title="사진 추가">📷<input type="file" id="photoInput" accept="image/*" multiple hidden></label>
         </div>
+        <div id="photoLocalHint" class="muted hidden" style="font-size:12px;margin-top:6px;">📷 사진은 이 기기에만 저장돼요 (기록·약은 가족과 공유됨)</div>
       </div>
     </section>
 
@@ -91,6 +92,11 @@
     <button data-action="goto-view" data-view="meds">💊<span>약 관리</span></button>
   </nav>
 
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-storage-compat.js"></script>
+  <script src="firebase-config.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

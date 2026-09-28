@@ -263,6 +263,21 @@ textarea { resize: vertical; }
   color: var(--muted);
 }
 
+/* 클라우드 상태 뱃지 */
+#cloudBadge {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(30, 30, 40, 0.85);
+  color: #fff;
+  font-size: 13px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  z-index: 9999;
+  pointer-events: none;
+}
+
 /* 달력 */
 .cal-weekdays {
   display: grid;

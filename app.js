@@ -1,5 +1,5 @@
 'use strict';
-/* 🐾 테디·포미 데일리 케어 */
+/* 🐾 폼폼케어 */
 
 // ---------- 상수 ----------
 const MOODS = [
@@ -74,6 +74,203 @@ function saveState() {
 }
 let state = loadState();
 
+// ---------- 클라우드 동기화 (Firebase) ----------
+// firebase-config.js에 실제 설정이 들어가면 클라우드 모드, 아니면 로컬 모드
+const CLOUD = { on: false, db: null, storage: null, storageOn: false, unsubs: [] };
+function cloudEnabled() {
+  const c = window.TPC_FIREBASE_CONFIG;
+  return !!(c && c.apiKey && c.apiKey.indexOf('YOUR_') !== 0 && typeof firebase !== 'undefined');
+}
+// 사진까지 클라우드로 공유하는 모드인지 (Storage 버킷 필요)
+function cloudPhotos() { return CLOUD.on && CLOUD.storageOn && !!CLOUD.storage; }
+function dayDocRef(dateS, dogId) { return CLOUD.db.collection('days').doc(dateS + '_' + dogId); }
+function medDocRef(medId) { return CLOUD.db.collection('meds').doc(medId); }
+function medLogDocRef(dateS, dogId, medId) { return CLOUD.db.collection('medLog').doc(dateS + '_' + dogId + '_' + medId); }
+function cloudWrite(p) {
+  if (CLOUD.on && p && p.catch) p.catch(function (e) { console.warn('[cloud 쓰기 실패]', e); });
+}
+// 타임 슬롯 필드 저장 (dot 표기로 필드 단위 병합 → 여러 사람이 동시에 써도 덜 겹침)
+function cloudSetSlotField(dateS, dogId, slot, field, value) {
+  if (!CLOUD.on) return;
+  const data = { date: dateS, dogId: dogId };
+  data['slots.' + slot + '.' + field] =
+    (value === undefined || value === null || value === '')
+      ? firebase.firestore.FieldValue.delete()
+      : value;
+  cloudWrite(dayDocRef(dateS, dogId).set(data, { merge: true }));
+}
+function cloudSetNote(dateS, dogId, note) {
+  if (!CLOUD.on) return;
+  cloudWrite(dayDocRef(dateS, dogId).set({ date: dateS, dogId: dogId, note: note }, { merge: true }));
+}
+function cloudSetMedCheck(dateS, dogId, medId, time, taken) {
+  if (!CLOUD.on) return;
+  const op = taken
+    ? firebase.firestore.FieldValue.arrayUnion(time)
+    : firebase.firestore.FieldValue.arrayRemove(time);
+  cloudWrite(medLogDocRef(dateS, dogId, medId).set(
+    { date: dateS, dogId: dogId, medId: medId, times: op }, { merge: true }));
+}
+function cloudSaveMed(m) {
+  if (!CLOUD.on) return;
+  cloudWrite(medDocRef(m.id).set({
+    id: m.id, dogId: ui.dog, name: m.name, times: m.times || [],
+    memo: m.memo || '', order: m.order || 0, createdAt: m.createdAt || 0,
+  }, { merge: true }));
+}
+function cloudDeleteMed(medId) {
+  if (!CLOUD.on) return;
+  cloudWrite(medDocRef(medId).delete());
+}
+
+function unsubscribeCloud() {
+  CLOUD.unsubs.forEach(function (u) { try { u(); } catch (e) {} });
+  CLOUD.unsubs = [];
+}
+// 현재 보고 있는 강아지/날짜/달에 맞춰 리스너 다시 걸기
+function subscribeCloud() {
+  if (!CLOUD.on) return;
+  unsubscribeCloud();
+  const dateS = ui.date, dogId = ui.dog;
+
+  // 오늘(선택 날짜) 기록
+  CLOUD.unsubs.push(dayDocRef(dateS, dogId).onSnapshot(function (doc) {
+    const rec = dayRec(dateS, dogId);
+    const prevChecks = rec.medChecks;
+    if (doc.exists) {
+      const d = doc.data();
+      rec.slots = d.slots || {};
+      rec.note = d.note || '';
+      rec.photos = d.photos || [];
+    } else {
+      rec.slots = {}; rec.note = ''; rec.photos = [];
+    }
+    SLOTS.forEach(function (s) { if (!rec.slots[s.id]) rec.slots[s.id] = {}; });
+    rec.medChecks = prevChecks || {};
+    saveState();
+    if (ui.view === 'today' && ui.date === dateS && ui.dog === dogId) renderToday();
+  }));
+
+  // 약 목록
+  CLOUD.unsubs.push(CLOUD.db.collection('meds').where('dogId', '==', dogId).onSnapshot(function (snap) {
+    const arr = [];
+    snap.forEach(function (doc) { arr.push(doc.data()); });
+    arr.sort(function (a, b) { return (a.order || 0) - (b.order || 0) || (a.createdAt || 0) - (b.createdAt || 0); });
+    state.meds[dogId] = arr;
+    saveState();
+    if (ui.dog !== dogId) return;
+    if (ui.view === 'today') renderToday();
+    if (ui.view === 'meds') renderMeds();
+  }));
+
+  // 약 복용 체크
+  CLOUD.unsubs.push(CLOUD.db.collection('medLog')
+    .where('date', '==', dateS).where('dogId', '==', dogId).onSnapshot(function (snap) {
+      const checks = {};
+      snap.forEach(function (doc) {
+        const d = doc.data();
+        (d.times || []).forEach(function (t) {
+          if (!checks[d.medId]) checks[d.medId] = {};
+          checks[d.medId][t] = true;
+        });
+      });
+      dayRec(dateS, dogId).medChecks = checks;
+      saveState();
+      if (ui.view === 'today' && ui.date === dateS && ui.dog === dogId) renderToday();
+    }));
+
+  // 달력 월간 기록
+  const cur = ui.calCursor, y = cur.getFullYear(), m = cur.getMonth();
+  const from = y + '-' + pad(m + 1) + '-01';
+  const to = y + '-' + pad(m + 1) + '-' + pad(new Date(y, m + 1, 0).getDate());
+  CLOUD.unsubs.push(CLOUD.db.collection('days')
+    .where('date', '>=', from).where('date', '<=', to).onSnapshot(function (snap) {
+      snap.forEach(function (doc) {
+        const d = doc.data();
+        if (!d.date || !d.dogId) return;
+        if (!state.days[d.date]) state.days[d.date] = {};
+        const prev = state.days[d.date][d.dogId];
+        state.days[d.date][d.dogId] = {
+          slots: d.slots || {},
+          medChecks: (prev && prev.medChecks) || {},
+          note: d.note || '',
+          photos: d.photos || [],
+        };
+      });
+      saveState();
+      if (ui.view === 'cal') renderCal();
+    }));
+}
+
+// 로컬 데이터를 클라우드로 1회 이관 (이미 클라우드에 있으면 병합만)
+async function migrateLocalToCloud() {
+  try {
+    if (localStorage.getItem('tpc_migrated_v1')) return;
+    const local = loadState();
+    const dogs = ['teddy', 'pomi'];
+    for (const dogId of dogs) {
+      const arr = (local.meds && local.meds[dogId]) || [];
+      for (let i = 0; i < arr.length; i++) {
+        const m = arr[i];
+        await medDocRef(m.id).set({
+          id: m.id, dogId: dogId, name: m.name, times: m.times || [],
+          memo: m.memo || '', order: i, createdAt: Date.now(),
+        }, { merge: true });
+      }
+    }
+    for (const dateS of Object.keys(local.days || {})) {
+      for (const dogId of Object.keys(local.days[dateS] || {})) {
+        const d = local.days[dateS][dogId];
+        for (const mid of Object.keys((d.medChecks) || {})) {
+          const times = Object.keys(d.medChecks[mid] || {}).filter(function (t) { return d.medChecks[mid][t]; });
+          if (times.length) {
+            await medLogDocRef(dateS, dogId, mid).set(
+              { date: dateS, dogId: dogId, medId: mid, times: times }, { merge: true });
+          }
+        }
+        await dayDocRef(dateS, dogId).set(
+          { date: dateS, dogId: dogId, slots: d.slots || {}, note: d.note || '' }, { merge: true });
+        // 사진 이관 (Storage 사용 모드일 때만)
+        if (CLOUD.storageOn && CLOUD.storage) {
+        for (const pid of (d.photos || [])) {
+          if (typeof pid !== 'string') continue;
+          try {
+            const dataUrl = await photoGet(pid);
+            if (!dataUrl) continue;
+            const path = 'photos/' + dateS + '/' + dogId + '/' + pid + '.jpg';
+            const ref = CLOUD.storage.ref(path);
+            await ref.put(dataUrlToBlob(dataUrl), { contentType: 'image/jpeg' });
+            const url = await ref.getDownloadURL();
+            await dayDocRef(dateS, dogId).set(
+              { photos: firebase.firestore.FieldValue.arrayUnion({ id: pid, url: url, path: path }) },
+              { merge: true });
+          } catch (e) {}
+        }
+        } // end if (CLOUD.storageOn)
+      }
+    }
+    localStorage.setItem('tpc_migrated_v1', '1');
+  } catch (e) { console.warn('[이관 실패]', e); }
+}
+
+async function bootCloud() {
+  try {
+    firebase.initializeApp(window.TPC_FIREBASE_CONFIG);
+    CLOUD.db = firebase.firestore();
+    try { await CLOUD.db.enablePersistence({ synchronizeTabs: true }); } catch (e) {}
+    CLOUD.storageOn = !!window.TPC_FIREBASE_CONFIG.storageOn;
+    if (CLOUD.storageOn) {
+      try { CLOUD.storage = firebase.storage(); } catch (e) { CLOUD.storageOn = false; }
+    }
+    await firebase.auth().signInAnonymously();
+    CLOUD.on = true;
+    await migrateLocalToCloud();
+    subscribeCloud();
+  } catch (e) {
+    console.warn('[클라우드 초기화 실패 → 로컬 모드]', e);
+  }
+}
+
 // 하루 기록 구조 보장
 function dayRec(dateS, dogId) {
   if (!state.days[dateS]) state.days[dateS] = {};
@@ -126,6 +323,34 @@ async function photoDel(id) {
     tx.oncomplete = function () { res(); };
     tx.onerror = function () { rej(tx.error); };
   });
+}
+// 사진 리사이즈 + 압축 → Blob (클라우드 업로드용)
+function fileToBlob(file, maxSize) {
+  maxSize = maxSize || 1024;
+  return new Promise(function (resolve, reject) {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = function () {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      c.toBlob(function (b) { b ? resolve(b) : reject(new Error('blob 실패')); }, 'image/jpeg', 0.75);
+    };
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+function dataUrlToBlob(dataUrl) {
+  const parts = dataUrl.split(',');
+  const mime = (parts[0].match(/:(.*?);/) || [])[1] || 'image/jpeg';
+  const bin = atob(parts[1]);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], { type: mime });
 }
 // 사진 리사이즈 + 압축
 function fileToDataUrl(file, maxSize) {
@@ -222,7 +447,10 @@ function renderToday() {
   document.getElementById('dateSub').textContent =
     ui.date === todayS ? '오늘' : (ui.date < todayS ? '지난 기록' : '미래 날짜');
 
-  // 3타임 슬롯 (접이식)
+  // 3타임 슬롯 (접이식) — 입력 중 포커스 유지 (동기화 리렌더 대비)
+  const ae = document.activeElement;
+  const mealFocus = (ae && ae.classList && ae.classList.contains('meal-note'))
+    ? { slot: ae.dataset.slot, s: ae.selectionStart, e: ae.selectionEnd } : null;
   document.getElementById('slotList').innerHTML = SLOTS.map(function (s) {
     const v = rec.slots[s.id] || {};
     const isOpen = ui.slotOpen.open[s.id];
@@ -241,6 +469,13 @@ function renderToday() {
         optRow('poop', s.id, POOPS, v.poop) + '</div>' +
       '</div></div>';
   }).join('');
+  if (mealFocus) {
+    const inp = document.querySelector('.meal-note[data-slot="' + mealFocus.slot + '"]');
+    if (inp) {
+      inp.focus();
+      try { inp.setSelectionRange(mealFocus.s, mealFocus.e); } catch (e) {}
+    }
+  }
 
   // 약 체크리스트 (시간 순)
   const meds = state.meds[ui.dog] || [];
@@ -266,12 +501,34 @@ function renderToday() {
   if (document.activeElement !== noteEl) noteEl.value = rec.note || '';
 
   renderPhotos(rec);
+  document.getElementById('photoLocalHint').classList.toggle('hidden', cloudPhotos());
 }
 
 async function renderPhotos(rec) {
   const box = document.getElementById('photoThumbs');
   box.innerHTML = '';
-  for (const pid of (rec.photos || [])) {
+  const photos = rec.photos || [];
+  // 클라우드 사진 모드: Storage URL을 바로 표시
+  if (cloudPhotos()) {
+    photos.forEach(function (p) {
+      if (!p || !p.url) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'thumb';
+      const img = document.createElement('img');
+      img.src = p.url;
+      img.alt = '기록 사진';
+      const del = document.createElement('button');
+      del.textContent = '✕';
+      del.setAttribute('aria-label', '사진 삭제');
+      del.addEventListener('click', function () { cloudDeletePhoto(rec, p); });
+      wrap.appendChild(img);
+      wrap.appendChild(del);
+      box.appendChild(wrap);
+    });
+    return;
+  }
+  // 로컬 모드: IndexedDB
+  for (const pid of photos) {
     try {
       const url = await photoGet(pid);
       if (!url) continue;
@@ -294,6 +551,39 @@ async function renderPhotos(rec) {
       box.appendChild(wrap);
     } catch (e) {}
   }
+}
+
+// 클라우드 사진 삭제
+async function cloudDeletePhoto(rec, p) {
+  rec.photos = (rec.photos || []).filter(function (x) { return x.id !== p.id; });
+  saveState();
+  renderPhotos(rec);
+  try { if (p.path) await CLOUD.storage.ref(p.path).delete(); } catch (e) {}
+  cloudWrite(dayDocRef(ui.date, ui.dog).set(
+    { photos: firebase.firestore.FieldValue.arrayRemove(p) }, { merge: true }));
+}
+
+// 클라우드 사진 추가
+async function cloudAddPhotos(rec, files) {
+  const dateS = ui.date, dogId = ui.dog;
+  for (const f of files) {
+    try {
+      const blob = await fileToBlob(f);
+      const pid = uid();
+      const path = 'photos/' + dateS + '/' + dogId + '/' + pid + '.jpg';
+      const ref = CLOUD.storage.ref(path);
+      await ref.put(blob, { contentType: 'image/jpeg' });
+      const url = await ref.getDownloadURL();
+      const entry = { id: pid, url: url, path: path };
+      rec.photos.push(entry);
+      saveState();
+      cloudWrite(dayDocRef(dateS, dogId).set({
+        date: dateS, dogId: dogId,
+        photos: firebase.firestore.FieldValue.arrayUnion(entry),
+      }, { merge: true }));
+    } catch (e) {}
+  }
+  renderPhotos(rec);
 }
 
 // ---------- 렌더: 달력 ----------
@@ -419,6 +709,7 @@ function switchView(v) {
   if (v === 'today') renderToday();
   if (v === 'cal') renderCal();
   if (v === 'meds') renderMeds();
+  subscribeCloud();
   window.scrollTo(0, 0);
 }
 
@@ -439,6 +730,7 @@ document.addEventListener('click', function (e) {
   if (a === 'select-dog') {
     ui.dog = el.dataset.dog;
     renderDogTabs();
+    subscribeCloud();
     if (ui.view === 'today') renderToday();
     if (ui.view === 'cal') renderCal();
     if (ui.view === 'meds') { ui.editingMedId = null; resetMedForm(); renderMeds(); }
@@ -446,11 +738,11 @@ document.addEventListener('click', function (e) {
   else if (a === 'goto-view') { switchView(el.dataset.view); }
   else if (a === 'prev-day') {
     const d = parseDate(ui.date); d.setDate(d.getDate() - 1);
-    ui.date = dateStr(d); renderToday();
+    ui.date = dateStr(d); renderToday(); subscribeCloud();
   }
   else if (a === 'next-day') {
     const d = parseDate(ui.date); d.setDate(d.getDate() + 1);
-    ui.date = dateStr(d); renderToday();
+    ui.date = dateStr(d); renderToday(); subscribeCloud();
   }
   else if (a === 'set-slot') {
     const rec = dayRec(ui.date, ui.dog);
@@ -460,6 +752,7 @@ document.addEventListener('click', function (e) {
     if (field === 'mood') val = Number(val);
     slot[field] = (slot[field] === val) ? undefined : val; // 다시 탭하면 취소
     saveState();
+    cloudSetSlotField(ui.date, ui.dog, el.dataset.slot, field, slot[field]);
     renderToday();
   }
   else if (a === 'toggle-slot') {
@@ -472,21 +765,24 @@ document.addEventListener('click', function (e) {
     const rec = dayRec(ui.date, ui.dog);
     const mid = el.dataset.med, t = el.dataset.time;
     if (!rec.medChecks[mid]) rec.medChecks[mid] = {};
-    rec.medChecks[mid][t] = !rec.medChecks[mid][t];
+    const on = !rec.medChecks[mid][t];
+    if (on) rec.medChecks[mid][t] = true; else delete rec.medChecks[mid][t];
     saveState();
+    cloudSetMedCheck(ui.date, ui.dog, mid, t, on);
     renderToday();
   }
   else if (a === 'cal-prev') {
     ui.calCursor = new Date(ui.calCursor.getFullYear(), ui.calCursor.getMonth() - 1, 1);
-    renderCal();
+    renderCal(); subscribeCloud();
   }
   else if (a === 'cal-next') {
     ui.calCursor = new Date(ui.calCursor.getFullYear(), ui.calCursor.getMonth() + 1, 1);
-    renderCal();
+    renderCal(); subscribeCloud();
   }
   else if (a === 'cal-day') {
     ui.date = el.dataset.date;
     renderCalDetail(el.dataset.date);
+    subscribeCloud();
   }
   else if (a === 'med-edit') {
     const m = (state.meds[ui.dog] || []).find(function (x) { return x.id === el.dataset.med; });
@@ -504,9 +800,18 @@ document.addEventListener('click', function (e) {
     if (!confirm('이 약을 삭제할까요?')) return;
     state.meds[ui.dog] = (state.meds[ui.dog] || []).filter(function (x) { return x.id !== el.dataset.med; });
     saveState();
+    cloudDeleteMed(el.dataset.med);
     renderMeds();
   }
 });
+
+// 텍스트 입력 → 클라우드 쓰기 디바운스 (타이핑 중 과다 쓰기 방지)
+let cloudTextTimer = null;
+function cloudTextLater(fn) {
+  if (!CLOUD.on) return;
+  clearTimeout(cloudTextTimer);
+  cloudTextTimer = setTimeout(fn, 800);
+}
 
 document.addEventListener('input', function (e) {
   const el = e.target;
@@ -514,16 +819,20 @@ document.addEventListener('input', function (e) {
     const rec = dayRec(ui.date, ui.dog);
     rec.note = el.value;
     saveState();
+    cloudTextLater(function () { cloudSetNote(ui.date, ui.dog, el.value); });
   } else if (el.dataset && el.dataset.action === 'meal-note') {
     const rec = dayRec(ui.date, ui.dog);
     rec.slots[el.dataset.slot].mealNote = el.value;
     saveState();
+    cloudTextLater(function () { cloudSetSlotField(ui.date, ui.dog, el.dataset.slot, 'mealNote', el.value); });
   }
 });
 
 document.getElementById('photoInput').addEventListener('change', async function (e) {
   const rec = dayRec(ui.date, ui.dog);
   const files = Array.from(e.target.files || []).slice(0, 5);
+  e.target.value = '';
+  if (cloudPhotos()) { await cloudAddPhotos(rec, files); return; }
   for (const f of files) {
     try {
       const dataUrl = await fileToDataUrl(f);
@@ -533,7 +842,6 @@ document.getElementById('photoInput').addEventListener('change', async function 
     } catch (err) {}
   }
   saveState();
-  e.target.value = '';
   renderPhotos(rec);
 });
 
@@ -554,9 +862,11 @@ document.getElementById('saveMedBtn').addEventListener('click', function () {
   if (!times.length) { alert('먹는 시간을 입력해 주세요 (예: 08:00, 20:00)'); return; }
   if (ui.editingMedId) {
     const m = (state.meds[ui.dog] || []).find(function (x) { return x.id === ui.editingMedId; });
-    if (m) { m.name = name; m.times = times; m.memo = memo; }
+    if (m) { m.name = name; m.times = times; m.memo = memo; cloudSaveMed(m); }
   } else {
-    state.meds[ui.dog].push({ id: uid(), name: name, times: times, memo: memo });
+    const m = { id: uid(), name: name, times: times, memo: memo, order: Date.now(), createdAt: Date.now() };
+    state.meds[ui.dog].push(m);
+    cloudSaveMed(m);
   }
   saveState();
   resetMedForm();
@@ -575,3 +885,14 @@ if ('serviceWorker' in navigator) {
 preloadDogPhotos();
 renderDogTabs();
 switchView('today');
+if (cloudEnabled()) {
+  const badge = document.createElement('div');
+  badge.id = 'cloudBadge';
+  badge.textContent = '☁️ 동기화 연결 중…';
+  document.body.appendChild(badge);
+  bootCloud().then(function () {
+    const b = document.getElementById('cloudBadge');
+    if (b) b.textContent = CLOUD.on ? '☁️ 가족 공유 연결됨' : '📱 로컬 모드';
+    setTimeout(function () { const x = document.getElementById('cloudBadge'); if (x) x.remove(); }, 2500);
+  });
+}
