@@ -323,7 +323,12 @@ function subscribeCloud() {
         };
       });
       saveState();
-      if (ui.view === 'cal') renderCal();
+      if (ui.view === 'cal') {
+        // 스냅샷으로 달력이 다시 그려져도 펼쳐 본 날짜 상세는 유지
+        const dd = ui.calDetailDate;
+        renderCal();
+        if (dd) { ui.calDetailDate = dd; renderCalDetail(dd); }
+      }
     }));
 }
 
@@ -506,6 +511,7 @@ const ui = {
   view: 'today',
   calCursor: (function () { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); })(),
   editingMedId: null,
+  calDetailDate: null, // 달력에서 펼쳐 본 날짜 (스냅샷 재렌더 때도 유지)
   slotOpen: null, // { date, open: { morning, lunch, evening } }
 };
 function dogName(id) {
@@ -752,6 +758,7 @@ function renderCal() {
   }
   document.getElementById('calGrid').innerHTML = html;
   document.getElementById('calDetail').classList.add('hidden');
+  ui.calDetailDate = null;
 }
 
 function renderCalDetail(dateS) {
@@ -907,6 +914,7 @@ document.addEventListener('click', function (e) {
   }
   else if (a === 'cal-day') {
     ui.date = el.dataset.date;
+    ui.calDetailDate = el.dataset.date;
     renderCalDetail(el.dataset.date);
     subscribeCloud();
   }
