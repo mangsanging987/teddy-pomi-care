@@ -1,4 +1,4 @@
-const CACHE = 'pomcare-v5';
+const CACHE = 'pomcare-v6';
 const ASSETS = [
   '.',
   'index.html',

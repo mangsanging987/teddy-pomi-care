@@ -199,8 +199,11 @@ function cloudSetSlotField(dateS, dogId, slot, field, value) {
   writeSlotField(dateS, dogId, slot, field, v);
 }
 function writeSlotField(dateS, dogId, slot, field, v) {
-  const data = { date: dateS, dogId: dogId };
-  data['slots.' + slot + '.' + field] =
+  // set({merge:true})은 점 표기 키를 해석하지 않고 문자 그대로 저장하므로
+  // 반드시 중첩 객체로 만들어서 보낸다 (문자열 "slots.morning.mood" 키로 저장되던 버그 수정)
+  const data = { date: dateS, dogId: dogId, slots: {} };
+  data.slots[slot] = {};
+  data.slots[slot][field] =
     (v === undefined) ? firebase.firestore.FieldValue.delete() : v;
   cloudWrite(dayDocRef(dateS, dogId).set(data, { merge: true }));
 }
